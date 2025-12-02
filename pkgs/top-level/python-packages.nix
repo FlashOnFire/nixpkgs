@@ -13285,8 +13285,6 @@ self: super: with self; {
 
   pyflic = callPackage ../development/python-modules/pyflic { };
 
-  pyflick = callPackage ../development/python-modules/pyflick { };
-
   pyflipper = callPackage ../development/python-modules/pyflipper { };
 
   pyfluidsynth = callPackage ../development/python-modules/pyfluidsynth { };
