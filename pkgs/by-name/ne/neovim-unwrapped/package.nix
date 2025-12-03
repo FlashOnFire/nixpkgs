@@ -2,7 +2,8 @@
   lib,
   stdenv,
   fetchFromGitHub,
-  cmake,
+  callPackage,
+  zig_0_15,
   gettext,
   libuv,
   lua,
@@ -10,9 +11,7 @@
   unibilium,
   utf8proc,
   tree-sitter,
-  fetchurl,
   buildPackages,
-  treesitter-parsers ? import ./treesitter-parsers.nix { inherit fetchurl; },
   fixDarwinDylibNames,
   glibcLocales ? null,
   procps ? null,
@@ -25,6 +24,31 @@
   fish ? null,
   python3 ? null,
 }:
+let
+  # Use buildPackages to ensure zig is available as a build tool during cross-compilation
+  zig = buildPackages.zig_0_15;
+  zig_hook = zig.hook.overrideAttrs {
+    zig_default_flags = "-Doptimize=ReleaseSafe --color off";
+  };
+
+  # Convert Nix target triple to Zig target triple
+  # Nix uses: aarch64-unknown-linux-gnu
+  # Zig uses: aarch64-linux-gnu
+  zigTarget =
+    if stdenv.hostPlatform == stdenv.buildPlatform then
+      null
+    else
+      let
+        cpu = stdenv.hostPlatform.parsed.cpu.name;
+        os = stdenv.hostPlatform.parsed.kernel.name;
+        abi = if stdenv.hostPlatform.parsed.abi.name == "unknown" then "gnu" else stdenv.hostPlatform.parsed.abi.name;
+      in
+      "${cpu}-${os}-${abi}";
+
+  # When cross-compiling, we need to provide native (build platform) LuaJIT
+  # for build-time tools like nlua0, buildvm, etc.
+  nativeLua = if stdenv.hostPlatform != stdenv.buildPlatform then buildPackages.luajit else null;
+in
 stdenv.mkDerivation (
   finalAttrs:
   let
@@ -95,15 +119,15 @@ stdenv.mkDerivation (
   in
   {
     pname = "neovim-unwrapped";
-    version = "0.11.5";
+    version = "0.12.0-dev";
 
     __structuredAttrs = true;
 
     src = fetchFromGitHub {
       owner = "neovim";
       repo = "neovim";
-      tag = "v${finalAttrs.version}";
-      hash = "sha256-OsvLB9kynCbQ8PDQ2VQ+L56iy7pZ0ZP69J2cEG8Ad8A=";
+      rev = "e62dd13f83a200105a2b8466e729c39485fa766d";
+      hash = "sha256-2M2e0NGkkAtZGc9IhC9+wbcQ5xyUVKgB9oN+WUteeeI=";
     };
 
     patches = [
@@ -114,19 +138,10 @@ stdenv.mkDerivation (
     ];
 
     inherit lua;
-    treesitter-parsers =
-      treesitter-parsers
-      // {
-        markdown = treesitter-parsers.markdown // {
-          location = "tree-sitter-markdown";
-        };
-      }
-      // {
-        markdown_inline = treesitter-parsers.markdown // {
-          language = "markdown_inline";
-          location = "tree-sitter-markdown-inline";
-        };
-      };
+
+    deps = callPackage ./deps.nix {
+      zig_0_15 = buildPackages.zig_0_15;
+    };
 
     buildInputs = [
       libuv
@@ -151,12 +166,12 @@ stdenv.mkDerivation (
     # make oldtests too
     checkPhase = ''
       runHook preCheck
-      make functionaltest
+      # Tests are handled by zig.hook's zigCheckPhase if enabled
       runHook postCheck
     '';
 
     nativeBuildInputs = [
-      cmake
+      zig_hook
       gettext
       pkg-config
     ];
@@ -177,57 +192,58 @@ stdenv.mkDerivation (
         pyEnv # for src/clint.py
       ];
 
-    # nvim --version output retains compilation flags and references to build tools
-    postPatch = lib.optionalString (!stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
-      sed -i runtime/CMakeLists.txt \
-        -e "s|\".*/bin/nvim|\${stdenv.hostPlatform.emulator buildPackages} &|g"
-      sed -i src/nvim/po/CMakeLists.txt \
-        -e "s|\$<TARGET_FILE:nvim|\${stdenv.hostPlatform.emulator buildPackages} &|g"
-    '';
     # check that the above patching actually works
     disallowedRequisites = [ stdenv.cc ] ++ lib.optional (lua != codegenLua) codegenLua;
 
-    cmakeFlags = [
-      # Don't use downloaded dependencies. At the end of the configurePhase one
-      # can spot that cmake says this option was "not used by the project".
-      # That's because all dependencies were found and
-      # third-party/CMakeLists.txt is not read at all.
-      (lib.cmakeBool "USE_BUNDLED" false)
-      (lib.cmakeBool "ENABLE_TRANSLATIONS" true)
-    ]
-    ++ (
-      if lua.pkgs.isLuaJIT then
-        [
-          (lib.cmakeFeature "LUAC_PRG" "${lib.getExe' codegenLua "luajit"} -b -s %s -")
-          (lib.cmakeFeature "LUA_GEN_PRG" (lib.getExe' codegenLua "luajit"))
-          (lib.cmakeFeature "LUA_PRG" (lib.getExe' neovimLuaEnvOnBuild "luajit"))
-        ]
-      else
-        [
-          (lib.cmakeBool "PREFER_LUA" true)
-        ]
-    );
+    preBuild = lib.optionalString (stdenv.hostPlatform != stdenv.buildPlatform) ''
+      # When cross-compiling, Zig handles both native (build tools) and target (final binary)
+      # compilation. However, Nix's cross-compilation environment pollutes the build with
+      # target-specific compiler flags and include paths that Zig's native builds pick up,
+      # causing ARM SVE header errors.
 
-    preConfigure = ''
-      mkdir -p $out/lib/nvim/parser
-    ''
-    + lib.concatStrings (
-      lib.mapAttrsToList (language: grammar: ''
-        ln -s \
-          ${
-            tree-sitter.buildGrammar {
-              inherit (grammar) src;
-              version = "neovim-${finalAttrs.version}";
-              language = grammar.language or language;
-              location = grammar.location or null;
-            }
-          }/parser \
-          $out/lib/nvim/parser/${language}.so
-      '') finalAttrs.treesitter-parsers
-    );
+      # Solution: Clear the Nix cross-compilation environment variables before running zig build.
+      # Zig will use its own bundled libc for C code compilation, avoiding system header issues.
+      unset NIX_CFLAGS_COMPILE NIX_LDFLAGS NIX_CFLAGS_COMPILE_BEFORE NIX_LDFLAGS_BEFORE
+      unset NIX_HARDENING_ENABLE NIX_IGNORE_LD_THROUGH_GCC
+
+      # Also clear CC/CXX to prevent Zig from using the cross-compilation wrappers
+      unset CC CXX LD AR RANLIB STRIP OBJCOPY OBJDUMP READELF NM SIZE STRINGS
+    '';
+
+    # Zig build flags - we need to specify the 'nvim' target explicitly
+    zigBuildFlags = [
+      "nvim"
+      "--system"
+      "${finalAttrs.deps}"
+    ]
+    ++ lib.optional lua.pkgs.isLuaJIT "-Dluajit=true"
+    ++ lib.optional (!lua.pkgs.isLuaJIT) "-Dluajit=false"
+    ++ lib.optional (!stdenv.hostPlatform.isDarwin) "-Dunibilium=true"
+    ++ lib.optional stdenv.hostPlatform.isDarwin "-Dunibilium=false"
+    # When cross-compiling, pass -Dcross=true to tell build.zig to build
+    # build-time tools (nlua0, buildvm, minilua) for the build platform
+    # and the final neovim binary for the target platform
+    ++ lib.optional (zigTarget != null) "-Dcross=true"
+    ++ lib.optional (zigTarget != null) "-Dtarget=${zigTarget}";
+
 
     shellHook = ''
       export VIMRUNTIME=$PWD/runtime
+    '';
+
+    postInstall = ''
+      # Install man page
+      # The Zig build doesn't install this automatically
+      mkdir -p $out/share/man/man1
+      cp src/man/nvim.1 $out/share/man/man1/
+    '' + lib.optionalString stdenv.hostPlatform.isLinux ''
+      # Install desktop file and icon for Linux systems
+      # The Zig build doesn't install these automatically
+      mkdir -p $out/share/applications
+      cp runtime/nvim.desktop $out/share/applications/
+
+      mkdir -p $out/share/icons/hicolor/128x128/apps
+      cp runtime/nvim.png $out/share/icons/hicolor/128x128/apps/
     '';
 
     separateDebugInfo = true;
@@ -254,7 +270,7 @@ stdenv.mkDerivation (
         - Improve extensibility with a new plugin architecture
       '';
       homepage = "https://neovim.io";
-      changelog = "https://github.com/neovim/neovim/releases/tag/${finalAttrs.src.tag}";
+      changelog = "https://github.com/neovim/neovim/blob/${finalAttrs.src.rev}/CHANGELOG.md";
       mainProgram = "nvim";
       # "Contributions committed before b17d96 by authors who did not sign the
       # Contributor License Agreement (CLA) remain under the Vim license.

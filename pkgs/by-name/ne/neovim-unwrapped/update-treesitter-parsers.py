@@ -7,8 +7,8 @@ from pathlib import Path
 
 parsers = {}
 dir = Path(__file__).parent
-regex = re.compile(r"^TREESITTER_([A-Z_]+)_(URL|SHA256)\s+(.+)$")
 
+# Fetch neovim source
 src = subprocess.check_output(
     [
         "nix-build",
@@ -20,27 +20,58 @@ src = subprocess.check_output(
     text=True,
 ).strip()
 
-for line in open(f"{src}/cmake.deps/deps.txt"):
-    m = regex.fullmatch(line.strip())
-    if m is None:
-        continue
+# Parse build.zig.zon to extract tree-sitter parser dependencies
+with open(f"{src}/build.zig.zon") as f:
+    content = f.read()
 
-    lang = m[1].lower()
-    ty = m[2]
-    val = m[3]
+    # Find all treesitter_* dependencies
+    # Pattern matches entries like:
+    # .treesitter_c = {
+    #     .url = "git+https://github.com/tree-sitter/tree-sitter-c?ref=v0.24.1#hash",
+    #     .hash = "...",
+    # },
+    pattern = re.compile(
+        r'\.treesitter_(\w+)\s*=\s*\{[^}]*\.url\s*=\s*"([^"]+)"[^}]*\.hash\s*=\s*"([^"]+)"',
+        re.MULTILINE | re.DOTALL,
+    )
 
-    if not lang in parsers:
-        parsers[lang] = {}
-    parsers[lang][ty] = val
+    for match in pattern.finditer(content):
+        lang = match.group(1)
+        url = match.group(2)
+        hash = match.group(3)
 
-with open(dir / "treesitter-parsers.nix", "w") as f:
-    f.write("{ fetchurl }:\n\n{\n")
-    for lang, src in parsers.items():
-        f.write(
-            f"""  {lang}.src = fetchurl {{
-    url = "{src["URL"]}";
-    hash = "sha256:{src["SHA256"]}";
-  }};
-"""
-        )
-    f.write("}\n")
+        # Extract version from URL (format: git+...?ref=vX.Y.Z#commit or similar)
+        # Example: git+https://github.com/tree-sitter/tree-sitter-c?ref=v0.24.1#hash
+        version_match = re.search(r"\?ref=([^#]+)", url)
+        if not version_match:
+            continue
+
+        version = version_match.group(1)
+
+        # Extract repo from URL
+        repo_match = re.search(r"github\.com/([^?]+)", url)
+        if not repo_match:
+            continue
+
+        repo = repo_match.group(1)
+
+        parsers[lang] = {
+            "repo": repo,
+            "version": version,
+            "hash": hash,
+        }
+
+# Note: Tree-sitter parsers are now managed directly by the Zig build system
+# via build.zig.zon dependencies. The Zig build system handles downloading
+# and building these parsers automatically.
+#
+# This script is kept for reference but tree-sitter-parsers.nix is no longer used.
+# The parsers are built as part of the main neovim build process.
+
+print("Tree-sitter parsers found in build.zig.zon:")
+for lang, info in parsers.items():
+    print(f"  {lang}: {info['repo']} @ {info['version']}")
+    print(f"    hash: {info['hash']}")
+
+print("\nNote: With the Zig build system, tree-sitter parsers are managed")
+print("automatically via build.zig.zon and don't need a separate .nix file.")
