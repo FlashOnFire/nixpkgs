@@ -270,7 +270,7 @@ let
           + lib.optionalString finalAttrs.viAlias ''
             ln -s $out/bin/nvim $out/bin/vi
           ''
-          + lib.optionalString (manifestRc != null) (
+          + lib.optionalString (manifestRc != null && stdenv.buildPlatform.canExecute stdenv.hostPlatform) (
             let
               manifestWrapperArgs = [
                 "${neovim-unwrapped}/bin/nvim"
