@@ -102,9 +102,9 @@ in
             preferLocalBuild = true;
             passAsFile = [ "value" ];
             value = builtins.toJSON value;
-            nativeBuildInputs = [
-              pkgs.jq
-              pkgs.libiconvReal
+            nativeBuildInputs = with pkgs.buildPackages; [
+              jq
+              libiconvReal
             ];
 
             jqCode =
