@@ -6,6 +6,7 @@
   pytest-repeat,
   pytestCheckHook,
   setuptools,
+  stdenv,
 }:
 
 buildPythonPackage rec {
@@ -23,6 +24,15 @@ buildPythonPackage rec {
   build-system = [
     setuptools
   ];
+
+  # The upstream setup.py uses platform.machine() to detect the target
+  # architecture, which returns the *build* host arch when cross-compiling.
+  # Upstream supports these environment variable overrides to set the correct
+  # SIMD target flags.
+  env = {
+    SZ_IS_64BIT_X86_ = if stdenv.hostPlatform.isx86_64 then "1" else "0";
+    SZ_IS_64BIT_ARM_ = if stdenv.hostPlatform.isAarch64 then "1" else "0";
+  };
 
   pythonImportsCheck = [ "stringzilla" ];
 
