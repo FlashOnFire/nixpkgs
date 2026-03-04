@@ -28,11 +28,11 @@
 # SOFTWARE.
 
 {
+  buildPackages,
   lib,
   pkg-config,
   rustPlatform,
   stdenv,
-  writeShellScriptBin,
 }:
 
 # The idea behind: Use it mostly like rustPlatform.buildRustPackage and so
@@ -91,7 +91,11 @@ lib.extendMkDerivation {
       "The parameter useFakeRustfmt is set to false, but rustfmt is not included in nativeBuildInputs. Either set useFakeRustfmt to true or add rustfmt from nativeBuildInputs.";
 
     let
-      fakeRustfmt = writeShellScriptBin "rustfmt" ''
+      isCross = stdenv.buildPlatform != stdenv.hostPlatform;
+
+      # Must use buildPackages so the script gets a build-host interpreter,
+      # otherwise the shebang points at a target-arch bash.
+      fakeRustfmt = buildPackages.writeShellScriptBin "rustfmt" ''
         exit 0
       '';
       maybeDebugFlag = lib.optionalString (buildType != "release") "--debug";
@@ -102,26 +106,77 @@ lib.extendMkDerivation {
       maybeLeaveBuildAndTestSubdir = lib.optionalString (buildAndTestSubdir != null) "popd";
 
       pgrxPostgresMajor = lib.versions.major postgresql.version;
-      preBuildAndTest = ''
-        export PGRX_HOME="$(mktemp -d)"
-        export PGDATA="$PGRX_HOME/data-${pgrxPostgresMajor}/"
-        cargo-pgrx pgrx init "--pg${pgrxPostgresMajor}" ${postgresql.pg_config}/bin/pg_config
 
-        # unix sockets work in sandbox, too.
-        export PGHOST="$(mktemp -d)"
-        cat > "$PGDATA/postgresql.conf" <<EOF
-        listen_addresses = ''\''
-        unix_socket_directories = '$PGHOST'
-        EOF
+      ccForBuild = "${buildPackages.stdenv.cc}/bin/${buildPackages.stdenv.cc.targetPrefix}cc";
+      cxxForBuild = "${buildPackages.stdenv.cc}/bin/${buildPackages.stdenv.cc.targetPrefix}c++";
+      ccForHost = "${stdenv.cc}/bin/${stdenv.cc.targetPrefix}cc";
+      cxxForHost = "${stdenv.cc}/bin/${stdenv.cc.targetPrefix}c++";
 
-        # This is primarily for Mac or other Nix systems that don't use the nixbld user.
-        export USER="$(whoami)"
-        pg_ctl start
-        createuser --superuser --createdb "$USER" || true
-        pg_ctl stop
-      '';
+      rustBuildCargoEnv = stdenv.buildPlatform.rust.cargoEnvVarTarget;
+      rustHostCargoEnv = stdenv.hostPlatform.rust.cargoEnvVarTarget;
+
+      # Native clang (build→build), not the cross-clang from buildPackages (build→host).
+      # Used to provide build-host-compatible sysroot flags for bindgen.
+      nativeClang = buildPackages.buildPackages.llvmPackages.clang;
+      nativeLibclang = lib.getLib buildPackages.buildPackages.llvmPackages.clang.cc;
+
+      buildTripleEnv = builtins.replaceStrings [ "-" ] [ "_" ] stdenv.buildPlatform.rust.rustcTarget;
+
+      preBuildAndTest =
+        ''
+          export PGRX_HOME="$(mktemp -d)"
+          export PGDATA="$PGRX_HOME/data-${pgrxPostgresMajor}/"
+        ''
+        + (
+          if isCross then
+            # --no-run: don't execute target binaries (initdb, pg_ctl) on the build host.
+            #
+            # cargo-pgrx internally runs two cargo builds:
+            #   1. The extension .so for the target (with --target)
+            #   2. A pgrx_embed helper for the build host (without --target) to generate SQL
+            #
+            # Per-triple CC/LINKER vars ensure each build uses the right compiler.
+            # BINDGEN_EXTRA_CLANG_ARGS_<build_triple> overrides the cross-sysroot flags
+            # from bindgenHook so the host-side pgrx_embed bindgen run sees build-platform
+            # headers instead of target-platform ones (which contain arch-specific types).
+            ''
+              cargo-pgrx pgrx init --no-run \
+                "--pg${pgrxPostgresMajor}" ${postgresql.pg_config}/bin/pg_config
+
+              export CC_${rustBuildCargoEnv}="${ccForBuild}"
+              export CXX_${rustBuildCargoEnv}="${cxxForBuild}"
+              export CARGO_TARGET_${rustBuildCargoEnv}_LINKER="${ccForBuild}"
+              export CC_${rustHostCargoEnv}="${ccForHost}"
+              export CXX_${rustHostCargoEnv}="${cxxForHost}"
+              export CARGO_TARGET_${rustHostCargoEnv}_LINKER="${ccForHost}"
+              export HOST_CC="${ccForBuild}"
+              export HOST_CXX="${cxxForBuild}"
+
+              BINDGEN_EXTRA_CLANG_ARGS_${buildTripleEnv}="$(< ${nativeClang}/nix-support/cc-cflags) $(< ${nativeClang}/nix-support/libc-cflags) $(< ${nativeClang}/nix-support/libcxx-cxxflags)"
+              export BINDGEN_EXTRA_CLANG_ARGS_${buildTripleEnv}
+              export LIBCLANG_PATH="${nativeLibclang}/lib"
+            ''
+          else
+            ''
+              cargo-pgrx pgrx init "--pg${pgrxPostgresMajor}" ${postgresql.pg_config}/bin/pg_config
+
+              # unix sockets work in sandbox, too.
+              export PGHOST="$(mktemp -d)"
+              cat > "$PGDATA/postgresql.conf" <<EOF
+              listen_addresses = ''\''
+              unix_socket_directories = '$PGHOST'
+              EOF
+
+              # This is primarily for Mac or other Nix systems that don't use the nixbld user.
+              export USER="$(whoami)"
+              pg_ctl start
+              createuser --superuser --createdb "$USER" || true
+              pg_ctl stop
+            ''
+        );
 
       cargoPgrxFlags' = lib.escapeShellArgs cargoPgrxFlags;
+      targetFlag = lib.optionalString isCross "--target ${stdenv.hostPlatform.rust.rustcTarget}";
     in
     {
       buildInputs = (args.buildInputs or [ ]);
@@ -150,6 +205,7 @@ lib.extendMkDerivation {
           --pg-config ${postgresql.pg_config}/bin/pg_config \
           ${maybeDebugFlag} \
           --features "${builtins.concatStringsSep " " buildFeatures}" \
+          ${targetFlag} \
           --out-dir "$out"
 
         ${maybeLeaveBuildAndTestSubdir}
@@ -157,7 +213,7 @@ lib.extendMkDerivation {
         runHook postBuild
       '';
 
-      preCheck = preBuildAndTest + args.preCheck or "";
+      preCheck = preBuildAndTest + (args.preCheck or "");
 
       installPhase = ''
         runHook preInstall
@@ -187,8 +243,10 @@ lib.extendMkDerivation {
         ++ [ "pg${pgrxPostgresMajor}" ];
 
       meta = (args.meta or { }) // {
-        # See comment in postgresql's generic.nix doInstallCheck section
-        broken = (args.meta.broken or false) || stdenv.hostPlatform.isDarwin;
+        broken =
+          (args.meta.broken or false)
+          # See comment in postgresql's generic.nix doInstallCheck section
+          || stdenv.hostPlatform.isDarwin;
       };
     };
 }
