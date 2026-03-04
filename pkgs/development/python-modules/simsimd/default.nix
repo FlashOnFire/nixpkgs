@@ -2,6 +2,7 @@
   buildPythonPackage,
   fetchFromGitHub,
   lib,
+  stdenv,
   numpy,
   pytest-repeat,
   pytestCheckHook,
@@ -24,6 +25,11 @@ buildPythonPackage rec {
   build-system = [
     setuptools
   ];
+
+  env = {
+    SIMSIMD_TARGET_X86 = if stdenv.hostPlatform.isx86_64 then "1" else "0";
+    SIMSIMD_TARGET_ARM64 = if stdenv.hostPlatform.isAarch64 then "1" else "0";
+  };
 
   pythonImportsCheck = [
     "simsimd"
