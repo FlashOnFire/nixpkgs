@@ -176,6 +176,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     libpng
     nlohmann_json
     microsoft-gsl
+    protobuf
     zlib
   ]
   ++ lib.optionals (lib.meta.availableOn effectiveStdenv.hostPlatform cpuinfo) [
@@ -263,8 +264,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_RE2" "${re2.src}")
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_SAFEINT" "${safeint-src}")
     (lib.cmakeFeature "FETCHCONTENT_TRY_FIND_PACKAGE_MODE" "ALWAYS")
-    # fails to find protoc on darwin, so specify it
-    (lib.cmakeFeature "ONNX_CUSTOM_PROTOC_EXECUTABLE" (lib.getExe protobuf))
+    (lib.cmakeFeature "ONNX_CUSTOM_PROTOC_EXECUTABLE" (lib.getExe (protobuf.__spliced.buildBuild or protobuf)))
     (lib.cmakeBool "onnxruntime_BUILD_SHARED_LIB" true)
     (lib.cmakeBool "onnxruntime_BUILD_UNIT_TESTS" finalAttrs.doCheck)
     (lib.cmakeBool "onnxruntime_USE_FULL_PROTOBUF" withFullProtobuf)
@@ -273,9 +273,18 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     (lib.cmakeBool "onnxruntime_USE_MIGRAPHX" rocmSupport)
     (lib.cmakeBool "onnxruntime_ENABLE_LTO" (!cudaSupport || cudaPackages.cudaOlder "12.8"))
   ]
-  ++ lib.optionals pythonSupport [
-    (lib.cmakeBool "onnxruntime_ENABLE_PYTHON" true)
-  ]
+  ++ lib.optionals pythonSupport (
+    [
+      (lib.cmakeBool "onnxruntime_ENABLE_PYTHON" true)
+    ]
+    ++ lib.optionals (!effectiveStdenv.buildPlatform.canExecute effectiveStdenv.hostPlatform) [
+      (lib.cmakeFeature "Python3_EXECUTABLE" (lib.getExe python3Packages.python.pythonOnBuildForHost))
+      (lib.cmakeFeature "Python_EXECUTABLE" (lib.getExe python3Packages.python.pythonOnBuildForHost))
+      (lib.cmakeFeature "Python_INCLUDE_DIR" "${python3Packages.python}/include/${python3Packages.python.libPrefix}")
+      (lib.cmakeFeature "Python_NumPy_INCLUDE_DIR" "${python3Packages.numpy}/${python3Packages.python.sitePackages}/numpy/_core/include")
+      (lib.cmakeFeature "Protobuf_DIR" "${protobuf}/lib/cmake/protobuf")
+    ]
+  )
   ++ lib.optionals cudaSupport [
     # Werror and cudnn_frontend deprecations make for a bad time.
     "--compile-no-warning-as-error"
@@ -322,6 +331,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     !(
       cudaSupport
       || rocmSupport
+      || !effectiveStdenv.buildPlatform.canExecute effectiveStdenv.hostPlatform
       || builtins.elem effectiveStdenv.buildPlatform.system [
         # aarch64-linux fails cpuinfo test, because /sys/devices/system/cpu/ does not exist in the sandbox
         "aarch64-linux"
@@ -358,7 +368,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   '';
 
   postBuild = lib.optionalString pythonSupport ''
-    ${python3Packages.python.interpreter} ../setup.py bdist_wheel
+    ${python3Packages.python.pythonOnBuildForHost.interpreter} ../setup.py bdist_wheel
   '';
 
   # perform parts of `tools/ci_build/github/linux/copy_strip_binary.sh`
