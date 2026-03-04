@@ -21,12 +21,8 @@ let
     maintainers
     mapAttrsToList
     ;
-  inherit (python3Packages)
-    build
-    pybind11
-    python
-    setuptools
-    ;
+  inherit (python3Packages) python;
+  pythonOnBuild = python.pythonOnBuildForHost;
 in
 stdenv.mkDerivation (finalAttrs: {
   __structuredAttrs = true;
@@ -48,13 +44,14 @@ stdenv.mkDerivation (finalAttrs: {
   ];
 
   nativeBuildInputs = [
-    build
     cmake
     ninja
+    pythonOnBuild
+  ] ++ (with pythonOnBuild.pkgs; [
+    build
     pybind11
-    python
     setuptools
-  ];
+  ]);
 
   # NOTE: python3Packages.protobuf does not propagate a dependency on protobuf's dev output, so we must bring it in
   # for the CMake files.
@@ -82,7 +79,17 @@ stdenv.mkDerivation (finalAttrs: {
     nanobind_DIR = "${python3Packages.nanobind}/${python.sitePackages}/nanobind/cmake";
   };
 
-  cmakeFlags = mapAttrsToList cmakeFeature finalAttrs.env;
+  cmakeFlags = mapAttrsToList cmakeFeature finalAttrs.env ++ [
+    (cmakeFeature "Python_EXECUTABLE" pythonOnBuild.interpreter)
+  ];
+
+  # When cross-compiling, upstream only finds Python's Interpreter component, but nanobind also needs Development
+  postPatch = lib.optionalString (stdenv.buildPlatform != stdenv.hostPlatform) ''
+    substituteInPlace CMakeLists.txt \
+      --replace-fail \
+        'find_package(Python REQUIRED COMPONENTS Interpreter)' \
+        'find_package(Python REQUIRED COMPONENTS Interpreter ''${python_dev_component})'
+  '';
 
   preConfigure = ''
     export MAX_JOBS=$NIX_BUILD_CORES
@@ -103,7 +110,7 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   # NOTE: Python specific tests happen in the python package.
-  doCheck = true;
+  doCheck = stdenv.buildPlatform.canExecute stdenv.hostPlatform;
 
   checkInputs = [ gtest ];
 
