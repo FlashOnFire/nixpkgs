@@ -35,7 +35,10 @@ buildPythonPackage rec {
       --replace-fail "setuptools~=" "setuptools>="
   '';
 
-  build-system = [ setuptools ];
+  build-system = [
+    numpy
+    setuptools
+  ];
 
   dependencies = [ numpy ];
 
