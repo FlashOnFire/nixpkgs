@@ -54,6 +54,8 @@ let
     && !stdenv.hostPlatform.isDarwin
     && stdenv.buildPlatform == stdenv.hostPlatform;
 
+  disableDoc = stdenv.hostPlatform.isMinGW || (stdenv.buildPlatform != stdenv.hostPlatform);
+
   inherit (stdenv.hostPlatform) isDarwin;
 
   # break the cyclic dependency
@@ -74,14 +76,14 @@ stdenv.mkDerivation rec {
     "dev"
     "out"
   ]
-  ++ lib.optionals (!stdenv.hostPlatform.isMinGW) [
+  ++ lib.optionals (!disableDoc) [
     "man"
     "devdoc"
   ];
 
   # Not normally useful docs.
-  outputInfo = "devdoc";
-  outputDoc = "devdoc";
+  outputInfo = if disableDoc then "dev" else "devdoc";
+  outputDoc = if disableDoc then "dev" else "devdoc";
 
   patches = [
     ./nix-ssl-cert-file.patch
@@ -135,7 +137,7 @@ stdenv.mkDerivation rec {
     ++ lib.optionals stdenv.hostPlatform.isLinux [
       "--enable-ktls"
     ]
-    ++ lib.optionals (stdenv.hostPlatform.isMinGW) [
+    ++ lib.optionals disableDoc [
       "--disable-doc"
     ]
     ++ lib.optionals (stdenv.hostPlatform.isLinux && tpmSupport) [
