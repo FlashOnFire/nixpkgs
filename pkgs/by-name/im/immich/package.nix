@@ -39,6 +39,22 @@
 let
   pnpm = pnpm_10;
 
+  # Map nixpkgs CPU name to node-gyp/npm arch name for cross-compilation
+  nodeArch =
+    let
+      cpu = stdenv.hostPlatform.parsed.cpu.name;
+    in
+    {
+      "x86_64" = "x64";
+      "aarch64" = "arm64";
+      "armv7l" = "arm";
+      "armv6l" = "arm";
+      "i686" = "ia32";
+      "riscv64" = "riscv64";
+      "powerpc64le" = "ppc64";
+    }
+    .${cpu} or cpu;
+
   esbuild' = buildPackages.esbuild.override {
     buildGoModule =
       args:
@@ -144,6 +160,9 @@ stdenv.mkDerivation (finalAttrs: {
     python3
     makeWrapper
     node-gyp # for building node_modules/sharp from source
+  ]
+  ++ lib.optionals (stdenv.buildPlatform != stdenv.hostPlatform) [
+      buildPackages.buildPackages.pkg-config
   ];
 
   buildInputs = [
@@ -163,10 +182,17 @@ stdenv.mkDerivation (finalAttrs: {
     vips'
   ];
 
-  env.SHARP_FORCE_GLOBAL_LIBVIPS = 1;
-  env.ESBUILD_BINARY_PATH = lib.getExe esbuild';
-  # fix for node-gyp, see https://github.com/nodejs/node-gyp/issues/1191#issuecomment-301243919
-  env.npm_config_nodedir = nodejs;
+  env =
+    {
+      SHARP_FORCE_GLOBAL_LIBVIPS = 1;
+      ESBUILD_BINARY_PATH = lib.getExe esbuild';
+      # fix for node-gyp, see https://github.com/nodejs/node-gyp/issues/1191#issuecomment-301243919
+      npm_config_nodedir = nodejs;
+    }
+    # When cross-compiling, tell node-gyp (used by sharp) to build for the target arch
+    // lib.optionalAttrs (stdenv.buildPlatform != stdenv.hostPlatform) {
+      npm_config_arch = nodeArch;
+    };
 
   buildPhase = ''
     runHook preBuild
