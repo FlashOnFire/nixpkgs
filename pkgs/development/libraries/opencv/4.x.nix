@@ -88,6 +88,7 @@
 
   bzip2,
   callPackage,
+  buildPackages,
 }@inputs:
 
 let
@@ -446,14 +447,22 @@ effectiveStdenv.mkDerivation {
     unzip
   ]
   ++ optionals enablePython (
-    [
-      pythonPackages.pip
-      pythonPackages.wheel
-      pythonPackages.setuptools
-    ]
-    ++ optionals (effectiveStdenv.hostPlatform == effectiveStdenv.buildPlatform) [
-      pythonPackages.pythonImportsCheckHook
-    ]
+    if effectiveStdenv.hostPlatform == effectiveStdenv.buildPlatform then
+      [
+        pythonPackages.pip
+        pythonPackages.wheel
+        pythonPackages.setuptools
+        pythonPackages.pythonImportsCheckHook
+      ]
+    else
+      # When cross-compiling, pythonPackages.* are target-arch binaries that
+      # can't execute on the build host.  Use the build-host python's pip/wheel/
+      # setuptools instead so the postInstall pip steps can actually run.
+      [
+        buildPackages.python3Packages.pip
+        buildPackages.python3Packages.wheel
+        buildPackages.python3Packages.setuptools
+      ]
   )
   ++ optionals enableCuda [
     cudaPackages.cuda_nvcc
@@ -542,6 +551,17 @@ effectiveStdenv.mkDerivation {
   ++ optionals enablePython [
     (cmakeOptionType "path" "OPENCV_PYTHON_INSTALL_PATH" pythonPackages.python.sitePackages)
   ]
+  ++ optionals (enablePython && effectiveStdenv.hostPlatform != effectiveStdenv.buildPlatform) [
+    # During cross builds the target Python (aarch64, etc.) ends up on PATH via
+    # nativeBuildInputs but can't actually execute on the build host.  OpenCV's
+    # OpenCVDetectPython.cmake detects the mismatch, clears its state and retries
+    # with find_host_package(Python3 "${preferred_version}" …).  When
+    # preferred_version is the empty string CMake passes the literal "" which
+    # evaluates to OFF, causing "find_package called with invalid argument 'OFF'".
+    # Pointing PYTHON3_EXECUTABLE at a runnable build-host interpreter avoids the
+    # mismatch entirely so the buggy retry path is never reached.
+    (cmakeOptionType "filepath" "PYTHON3_EXECUTABLE" "${lib.getExe buildPackages.python3}")
+  ]
   ++ optionals (enabledModules != [ ]) [
     (cmakeFeature "BUILD_LIST" (concatStringsSep "," enabledModules))
   ];
@@ -608,7 +628,7 @@ effectiveStdenv.mkDerivation {
     popd
   '';
 
-  pythonImportsCheck = [
+  pythonImportsCheck = optionals (enablePython && effectiveStdenv.hostPlatform == effectiveStdenv.buildPlatform) [
     "cv2"
     "cv2.sfm"
   ];
