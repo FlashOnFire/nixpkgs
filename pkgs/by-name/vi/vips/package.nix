@@ -45,11 +45,12 @@
   poppler,
   withIntrospection ?
     lib.meta.availableOn stdenv.hostPlatform gobject-introspection
-    && stdenv.hostPlatform.emulatorAvailable buildPackages,
+    && stdenv.hostPlatform.emulatorAvailable buildPackages
+    && (stdenv.buildPlatform == stdenv.hostPlatform),
   withDevDoc ?
     !stdenv.hostPlatform.isDarwin
     && !stdenv.hostPlatform.isFreeBSD
-    && !(stdenv.hostPlatform.isRiscV && stdenv.isLinux),
+    && (stdenv.buildPlatform == stdenv.hostPlatform),
 
   # passthru
   testers,

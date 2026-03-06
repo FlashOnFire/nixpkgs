@@ -43,7 +43,8 @@
   poppler,
   withIntrospection ?
     lib.meta.availableOn stdenv.hostPlatform gobject-introspection
-    && stdenv.hostPlatform.emulatorAvailable buildPackages,
+    && stdenv.hostPlatform.emulatorAvailable buildPackages
+    && (stdenv.buildPlatform == stdenv.hostPlatform),
 
   # passthru
   testers,
@@ -63,7 +64,11 @@ stdenv.mkDerivation (finalAttrs: {
     "man"
     "dev"
   ]
-  ++ lib.optionals (!stdenv.hostPlatform.isDarwin && !stdenv.hostPlatform.isFreeBSD) [ "devdoc" ];
+  ++ lib.optionals (
+    !stdenv.hostPlatform.isDarwin
+    && !stdenv.hostPlatform.isFreeBSD
+    && (stdenv.buildPlatform == stdenv.hostPlatform)
+  ) [ "devdoc" ];
 
   src = fetchFromGitHub {
     owner = "libvips";
@@ -88,9 +93,16 @@ stdenv.mkDerivation (finalAttrs: {
     ninja
     pkg-config
   ]
-  ++ lib.optionals (!stdenv.hostPlatform.isDarwin && !stdenv.hostPlatform.isFreeBSD) [
-    gi-docgen
-  ];
+  ++
+    lib.optionals
+      (
+        !stdenv.hostPlatform.isDarwin
+        && !stdenv.hostPlatform.isFreeBSD
+        && (stdenv.buildPlatform == stdenv.hostPlatform)
+      )
+      [
+        gi-docgen
+      ];
 
   buildInputs = [
     glib
@@ -134,9 +146,11 @@ stdenv.mkDerivation (finalAttrs: {
     (lib.mesonEnable "spng" false) # we want to use libpng
     (lib.mesonEnable "introspection" withIntrospection)
   ]
-  ++ lib.optional (!stdenv.hostPlatform.isDarwin && !stdenv.hostPlatform.isFreeBSD) (
-    lib.mesonBool "docs" true
-  )
+  ++ lib.optional (
+    !stdenv.hostPlatform.isDarwin
+    && !stdenv.hostPlatform.isFreeBSD
+    && (stdenv.buildPlatform == stdenv.hostPlatform)
+  ) (lib.mesonBool "docs" true)
   ++ lib.optional (imagemagick == null) (lib.mesonEnable "magick" false);
 
   postFixup = ''
