@@ -36,6 +36,7 @@ buildPythonPackage rec {
 
   build-system = [
     cython
+    numpy
     setuptools
   ];
 
