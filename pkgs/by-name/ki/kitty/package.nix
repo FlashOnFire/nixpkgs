@@ -46,6 +46,8 @@
   makeBinaryWrapper,
   darwin,
   cairo,
+  fetchpatch,
+  buildPackages,
 }:
 
 with python3Packages;
@@ -157,7 +159,54 @@ buildPythonApplication rec {
     CGO_ENABLED = 0;
     GOFLAGS = "-trimpath";
     GOTOOLCHAIN = "local";
+  }
+  // lib.optionalAttrs (stdenv.hostPlatform != stdenv.buildPlatform) {
+    PKGCONFIG_EXE = "${stdenv.hostPlatform.config}-pkg-config";
   };
+
+  postPatch =
+    lib.optionalString (stdenv.hostPlatform != stdenv.buildPlatform && stdenv.hostPlatform.isLinux)
+      ''
+        # When cross-compiling, glfw/glfw.py resolves the wayland-scanner binary
+        # via pkg-config which finds the target-arch (non-executable) one.
+        # Hardcode the native binary path directly so it doesn't need pkg-config.
+        substituteInPlace glfw/glfw.py \
+          --replace-fail \
+            "os.path.abspath(pkg_config('wayland-scanner', '--variable=wayland_scanner')[0])" \
+            "'${buildPackages.wayland-scanner}/bin/wayland-scanner'"
+
+        # update_go_generated_files runs the just-built (target-arch) kitty binary
+        # via "kitty +launch gen/go_code.py" to regenerate Go source/data files.
+        # When cross-compiling that binary can't execute on the build host.
+        # Patch setup.py to use the native kitty from buildPackages instead.
+        substituteInPlace setup.py \
+          --replace-fail \
+            "cp = subprocess.run([kitty_exe, '+launch', os.path.join(src_base, 'gen/go_code.py')], stdout=subprocess.DEVNULL, env=env)" \
+            "cp = subprocess.run(['${buildPackages.kitty}/bin/kitty', '+launch', os.path.join(src_base, 'gen/go_code.py')], stdout=subprocess.DEVNULL, env=env)"
+
+        # gen/go_code.py spawns "go run generate.go" (start_simdgen) to produce SIMD
+        # assembly.  That sub-process inherits the cross CC from the build environment
+        # and tries to link an x86_64 binary with the aarch64 cross-compiler, which
+        # fails.  Force CGO_ENABLED=0 and clear CC/CXX so the Go host toolchain is
+        # used without CGO for that step.
+        sed -i 's|cwd=.tools/simdstring., stdout=subprocess.PIPE, stderr=subprocess.PIPE)|cwd="tools/simdstring", stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**os.environ, "CGO_ENABLED": "0", "CC": "", "CXX": ""})|' gen/go_code.py
+
+        # build_static_kittens calls run_one which builds the kitten binary using Go.
+        # Without for_platform set, it targets the host arch (x86_64) with whatever
+        # CC is in the environment (the aarch64 cross-compiler), causing a link
+        # failure.  Patch run_one to cross-compile for the target platform instead,
+        # using CGO_ENABLED=0 and the correct GOOS/GOARCH, with CC cleared so the
+        # Go internal linker is used.
+        substituteInPlace setup.py \
+          --replace-fail \
+            "e.pop('PWD', None)" \
+            "e.pop('PWD', None); e['CGO_ENABLED'] = '0'; e['GOOS'] = 'linux'; e['GOARCH'] = '${stdenv.hostPlatform.go.GOARCH}'; e.pop('CC', None); e.pop('CXX', None)"
+
+        # setup.py linux-package tries to run "make docs" (which imports the aarch64
+        # kitty C extension) if docs/_build/html doesn't exist.  Pre-create the
+        # directory so it skips that step when cross-compiling.
+        mkdir -p docs/_build/html docs/_build/man
+      '';
 
   configurePhase = ''
     export GOCACHE=$TMPDIR/go-cache
@@ -168,10 +217,7 @@ buildPythonApplication rec {
 
   buildPhase =
     let
-      commonOptions = ''
-        --update-check-interval=0 \
-        --shell-integration=enabled\ no-rc
-      '';
+      commonOptions = "--update-check-interval=0 " + "--shell-integration='enabled no-rc' ";
       darwinOptions = ''
         --disable-link-time-optimization \
         ${commonOptions}
@@ -294,10 +340,12 @@ buildPythonApplication rec {
       ]
     }"
 
-    installShellCompletion --cmd kitty \
-      --bash <("$out/bin/kitty" +complete setup bash) \
-      --fish <("$out/bin/kitty" +complete setup fish2) \
-      --zsh  <("$out/bin/kitty" +complete setup zsh)
+    ${lib.optionalString (stdenv.hostPlatform == stdenv.buildPlatform) ''
+      installShellCompletion --cmd kitty \
+        --bash <("$out/bin/kitty" +complete setup bash) \
+        --fish <("$out/bin/kitty" +complete setup fish2) \
+        --zsh  <("$out/bin/kitty" +complete setup zsh)
+    ''}
 
     terminfo_src=${
       if stdenv.hostPlatform.isDarwin then
