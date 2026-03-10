@@ -40,7 +40,8 @@
   withIntrospection ?
     stdenv.hostPlatform.emulatorAvailable buildPackages
     && lib.meta.availableOn stdenv.hostPlatform gobject-introspection
-    && stdenv.hostPlatform.isLittleEndian == stdenv.buildPlatform.isLittleEndian,
+    && stdenv.hostPlatform.isLittleEndian == stdenv.buildPlatform.isLittleEndian
+    && stdenv.buildPlatform == stdenv.hostPlatform,
 }:
 
 assert stdenv.hostPlatform.isLinux -> util-linuxMinimal != null;
