@@ -23,7 +23,8 @@
   buildPackages,
   withIntrospection ?
     lib.meta.availableOn stdenv.hostPlatform gobject-introspection
-    && stdenv.hostPlatform.emulatorAvailable buildPackages,
+    && stdenv.hostPlatform.emulatorAvailable buildPackages
+    && stdenv.buildPlatform == stdenv.hostPlatform,
   libunwind,
   withLibunwind ?
     lib.meta.availableOn stdenv.hostPlatform libunwind
