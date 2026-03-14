@@ -173,6 +173,8 @@ let
           )
         else
           stdenv;
+
+      buildingManPages = stdenv.buildPlatform.canExecute stdenv.hostPlatform;
     in
     stdenv'.mkDerivation (finalAttrs: {
       inherit version;
@@ -193,8 +195,8 @@ let
         "dev"
         "doc"
         "lib"
-        "man"
       ]
+      ++ lib.optionals buildingManPages [ "man" ]
       ++ lib.optionals jitSupport [ "jit" ]
       ++ lib.optionals perlSupport [ "plperl" ]
       ++ lib.optionals pythonSupport [ "plpython3" ]
@@ -205,8 +207,8 @@ let
           disallowedReferences = [
             "dev"
             "doc"
-            "man"
           ]
+          ++ lib.optionals buildingManPages [ "man" ]
           ++ lib.optionals jitSupport [ "jit" ];
           disallowedRequisites = [
             stdenv'.cc
@@ -221,8 +223,8 @@ let
             "out"
             "dev"
             "doc"
-            "man"
           ]
+          ++ lib.optionals buildingManPages [ "man" ]
           ++ lib.optionals jitSupport [ "jit" ];
           disallowedRequisites = [
             stdenv'.cc
@@ -236,11 +238,13 @@ let
           disallowedReferences = [
             "out"
             "dev"
-            "man"
           ]
+          ++ lib.optionals buildingManPages [ "man" ]
           ++ lib.optionals jitSupport [ "jit" ];
         };
 
+      }
+      // lib.optionalAttrs buildingManPages {
         man = {
           disallowedReferences = [
             "out"
