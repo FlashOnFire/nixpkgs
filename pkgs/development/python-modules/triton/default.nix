@@ -10,6 +10,8 @@
   replaceVars,
   addDriverRunpath,
   cudaPackages,
+  buildPackages,
+  bash,
 
   # build-system
   setuptools,
@@ -56,19 +58,19 @@ buildPythonPackage (finalAttrs: {
   };
 
   patches = [
-    (replaceVars ./0001-_build-allow-extra-cc-flags.patch {
+    (buildPackages.replaceVars ./0001-_build-allow-extra-cc-flags.patch {
       ccCmdExtraFlags = "-Wl,-rpath,${addDriverRunpath.driverLink}/lib";
     })
-    (replaceVars ./0002-nvidia-driver-short-circuit-before-ldconfig.patch {
+    (buildPackages.replaceVars ./0002-nvidia-driver-short-circuit-before-ldconfig.patch {
       libcudaStubsDir =
         if cudaSupport then "${lib.getOutput "stubs" cudaPackages.cuda_cudart}/lib/stubs" else null;
     })
   ]
   ++ lib.optionals cudaSupport [
-    (replaceVars ./0003-nvidia-cudart-a-systempath.patch {
+    (buildPackages.replaceVars ./0003-nvidia-cudart-a-systempath.patch {
       cudaToolkitIncludeDirs = "${lib.getInclude cudaPackages.cuda_cudart}/include";
     })
-    (replaceVars ./0004-nvidia-allow-static-ptxas-path.patch {
+    (buildPackages.replaceVars ./0004-nvidia-allow-static-ptxas-path.patch {
       nixpkgsExtraBinaryPaths = lib.escapeShellArgs [ (lib.getExe' cudaPackages.cuda_nvcc "ptxas") ];
     })
   ];
