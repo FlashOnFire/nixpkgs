@@ -7,6 +7,8 @@
   rustPlatform,
   buildNpmPackage,
   nix-update-script,
+  buildPackages,
+  stdenv,
 }:
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "oxicloud";
@@ -55,6 +57,11 @@ rustPlatform.buildRustPackage (finalAttrs: {
       runHook postInstall
     '';
   });
+
+  env = lib.optionalAttrs (stdenv.buildPlatform != stdenv.hostPlatform) {
+    "CC_${lib.strings.toLower stdenv.buildPlatform.rust.cargoEnvVarTarget}" =
+      lib.getExe' buildPackages.stdenv.cc "cc";
+  };
 
   postInstall = ''
     mkdir -p $out/share/oxicloud
